@@ -219,6 +219,12 @@ class StreamDiffusion:
                  print(f"[StreamDiffusion.prepare] self.pipe.unet.config.cross_attention_dim: {self.pipe.unet.config.cross_attention_dim}")
             else:
                  print("[StreamDiffusion.prepare] Could not retrieve self.pipe.unet.config.cross_attention_dim")
+            print("[StreamDiffusion.prepare] Checking self.pipe.unet.config.addition_time_embed_dim...")
+            if hasattr(self.pipe, 'unet') and hasattr(self.pipe.unet, 'config') and hasattr(self.pipe.unet.config, 'addition_time_embed_dim'):
+                 print(f"[StreamDiffusion.prepare] self.pipe.unet.config.addition_time_embed_dim: {self.pipe.unet.config.addition_time_embed_dim}")
+                 print(f"[StreamDiffusion.prepare] Type of addition_time_embed_dim: {type(self.pipe.unet.config.addition_time_embed_dim)}")
+            else:
+                 print("[StreamDiffusion.prepare] Could not retrieve self.pipe.unet.config.addition_time_embed_dim or it's missing.")
             # ==== END SDXL DIAGNOSTIC LOGGING (StreamDiffusion.prepare) ====
             self.sdxl_add_time_ids = self.pipe._get_add_time_ids(
                 original_size=(self.height, self.width),
