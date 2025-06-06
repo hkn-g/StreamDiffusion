@@ -203,9 +203,8 @@ class StreamDiffusion:
                 original_size=(self.height, self.width),
                 crops_coords_top_left=(0, 0),
                 target_size=(self.height, self.width),
-                dtype=prompt_embeds_main.dtype,
-                device=self.device
-            )
+                dtype=prompt_embeds_main.dtype
+            ).to(self.device)
         else:
             # Original non-SDXL prompt encoding logic
             encoder_output = self.pipe.encode_prompt(
