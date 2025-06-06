@@ -42,7 +42,13 @@ class StreamDiffusion:
         self.cfg_type = cfg_type
 
         if use_denoising_batch:
-            self.batch_size = self.denoising_steps_num * frame_buffer_size
+            if self.denoising_steps_num > 1:
+                self.batch_size = 1 + (self.denoising_steps_num - 1) * frame_buffer_size
+            elif self.denoising_steps_num == 1:
+                self.batch_size = 1
+            else: # self.denoising_steps_num is 0 or invalid
+                self.batch_size = 0 # Or raise an error for invalid DSN
+
             if self.cfg_type == "initialize":
                 self.trt_unet_batch_size = (
                     self.denoising_steps_num + 1
@@ -52,7 +58,7 @@ class StreamDiffusion:
                     2 * self.denoising_steps_num * self.frame_bff_size
                 )
             else:
-                self.trt_unet_batch_size = self.denoising_steps_num * frame_buffer_size
+                self.trt_unet_batch_size = self.denoising_steps_num * self.frame_bff_size
         else:
             self.trt_unet_batch_size = self.frame_bff_size
             self.batch_size = frame_buffer_size
