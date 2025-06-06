@@ -386,21 +386,28 @@ class StreamDiffusion:
         t_list: Union[torch.Tensor, list[int]],
         idx: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if torch.isnan(x_t_latent).any() or torch.isinf(x_t_latent).any():
+            print(f"[StreamDiffusion.unet_step] WARNING: Input x_t_latent to unet_step contains NaN/inf values!")
+            print(f"[StreamDiffusion.unet_step] x_t_latent (input) min: {x_t_latent.min().item() if x_t_latent.numel() > 0 else 'N/A'}, max: {x_t_latent.max().item() if x_t_latent.numel() > 0 else 'N/A'}, mean: {x_t_latent.mean().item() if x_t_latent.numel() > 0 else 'N/A'}")
+
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             x_t_latent_plus_uc = torch.concat([x_t_latent[0:1], x_t_latent], dim=0)
             t_list = torch.concat([t_list[0:1], t_list], dim=0)
         elif self.guidance_scale > 1.0 and (self.cfg_type == "full"):
-            x_t_latent_plus_uc = torch.concat([x_t_latent, x_t_latent], dim=0)
+            if torch.isnan(x_t_latent).any() or torch.isinf(x_t_latent).any():
+                print(f"[StreamDiffusion.unet_step] WARNING: x_t_latent (conditional) contains NaN/inf values before torch.cat!")
+                print(f"[StreamDiffusion.unet_step] x_t_latent min: {x_t_latent.min().item() if x_t_latent.numel() > 0 else 'N/A'}, max: {x_t_latent.max().item() if x_t_latent.numel() > 0 else 'N/A'}, mean: {x_t_latent.mean().item() if x_t_latent.numel() > 0 else 'N/A'}")
+            
+            if self.cfg_type == "full" and (torch.isnan(self.empty_latent).any() or torch.isinf(self.empty_latent).any()):
+                print(f"[StreamDiffusion.unet_step] WARNING: self.empty_latent (source for uc) contains NaN/inf values!")
+                print(f"[StreamDiffusion.unet_step] self.empty_latent min: {self.empty_latent.min().item() if self.empty_latent.numel() > 0 else 'N/A'}, max: {self.empty_latent.max().item() if self.empty_latent.numel() > 0 else 'N/A'}, mean: {self.empty_latent.mean().item() if self.empty_latent.numel() > 0 else 'N/A'}")
+
+            x_t_latent_plus_uc = torch.cat([x_t_latent, self.empty_latent], dim=0)
             t_list = torch.concat([t_list, t_list], dim=0)
         else:
             x_t_latent_plus_uc = x_t_latent
 
-        added_cond_kwargs = None
-        if hasattr(self, 'is_xl') and self.is_xl and hasattr(self, 'sdxl_pooled_prompt_embeds') and self.sdxl_pooled_prompt_embeds is not None and hasattr(self, 'sdxl_add_time_ids') and self.sdxl_add_time_ids is not None:
-            # Prepare added_cond_kwargs for SDXL
-            _current_text_embeds = self.sdxl_pooled_prompt_embeds # This is (1, D_pool) or (batch_pooled, D_pool)
-            _current_add_time_ids = self.sdxl_add_time_ids     # This is (1, D_time) or (batch_time, D_time)
-
+        # ... (rest of the code remains the same)
             # Determine the batch size of x_t_latent_plus_uc, which is what UNet will see
             unet_input_batch_size = x_t_latent_plus_uc.shape[0]
 
@@ -587,13 +594,51 @@ class StreamDiffusion:
         return denoised_batch, model_pred
 
     def encode_image(self, image_tensors: torch.Tensor) -> torch.Tensor:
-        image_tensors = image_tensors.to(
+        if torch.isnan(image_tensors).any() or torch.isinf(image_tensors).any():
+            print(f"[StreamDiffusion.encode_image] WARNING: Input image_tensors contains NaN/inf values!")
+            print(f"[StreamDiffusion.encode_image] image_tensors min: {image_tensors.min().item() if image_tensors.numel() > 0 else 'N/A'}, max: {image_tensors.max().item() if image_tensors.numel() > 0 else 'N/A'}, mean: {image_tensors.mean().item() if image_tensors.numel() > 0 else 'N/A'}")
+
+        image_tensors_for_vae = image_tensors.to(
             device=self.device,
-            dtype=self.vae.dtype,
+            dtype=self.vae.dtype, 
         )
-        img_latent = retrieve_latents(self.vae.encode(image_tensors), self.generator)
-        img_latent = img_latent * self.vae.config.scaling_factor
-        x_t_latent = self.add_noise(img_latent, self.init_noise[0], 0)
+        
+        encoded_output = self.vae.encode(image_tensors_for_vae)
+        # Check the sample from the latent distribution
+        # Sample once and reuse for checking and for retrieve_latents if it expects a sample
+        # However, retrieve_latents might do its own sampling or use .mean. Assuming it handles encoded_output.
+        sampled_latents_for_check = encoded_output.latent_dist.sample(generator=self.generator)
+        
+        if torch.isnan(sampled_latents_for_check).any() or torch.isinf(sampled_latents_for_check).any():
+            print(f"[StreamDiffusion.encode_image] WARNING: VAE encoded_output.latent_dist.sample() contains NaN/inf values!")
+            mean_val = encoded_output.latent_dist.mean
+            std_val = encoded_output.latent_dist.std
+            print(f"[StreamDiffusion.encode_image] VAE encoded_output mean min: {mean_val.min().item() if mean_val.numel() > 0 else 'N/A'}, max: {mean_val.max().item() if mean_val.numel() > 0 else 'N/A'}")
+            print(f"[StreamDiffusion.encode_image] VAE encoded_output std min: {std_val.min().item() if std_val.numel() > 0 else 'N/A'}, max: {std_val.max().item() if std_val.numel() > 0 else 'N/A'}")
+
+        img_latent = retrieve_latents(encoded_output, self.generator)
+        
+        if torch.isnan(img_latent).any() or torch.isinf(img_latent).any():
+            print(f"[StreamDiffusion.encode_image] WARNING: img_latent (after retrieve_latents) contains NaN/inf values!")
+            print(f"[StreamDiffusion.encode_image] img_latent min: {img_latent.min().item() if img_latent.numel() > 0 else 'N/A'}, max: {img_latent.max().item() if img_latent.numel() > 0 else 'N/A'}, mean: {img_latent.mean().item() if img_latent.numel() > 0 else 'N/A'}")
+
+        img_latent_scaled = img_latent * self.vae.config.scaling_factor
+        if torch.isnan(img_latent_scaled).any() or torch.isinf(img_latent_scaled).any():
+            print(f"[StreamDiffusion.encode_image] WARNING: img_latent (after scaling_factor) contains NaN/inf values!")
+            print(f"[StreamDiffusion.encode_image] img_latent (scaled) min: {img_latent_scaled.min().item() if img_latent_scaled.numel() > 0 else 'N/A'}, max: {img_latent_scaled.max().item() if img_latent_scaled.numel() > 0 else 'N/A'}, mean: {img_latent_scaled.mean().item() if img_latent_scaled.numel() > 0 else 'N/A'}")
+
+        if self.init_noise is not None and (torch.isnan(self.init_noise[0]).any() or torch.isinf(self.init_noise[0]).any()):
+            print(f"[StreamDiffusion.encode_image] WARNING: self.init_noise[0] contains NaN/inf values before add_noise!")
+
+        # Ensure img_latent_scaled is on the correct device and dtype for add_noise
+        # add_noise typically uses self.dtype for its operations and output.
+        img_latent_for_add_noise = img_latent_scaled.to(device=self.device, dtype=self.dtype)
+
+        x_t_latent = self.add_noise(img_latent_for_add_noise, self.init_noise[0], 0) 
+        if torch.isnan(x_t_latent).any() or torch.isinf(x_t_latent).any():
+            print(f"[StreamDiffusion.encode_image] WARNING: x_t_latent (output of encode_image) contains NaN/inf values!")
+            print(f"[StreamDiffusion.encode_image] x_t_latent min: {x_t_latent.min().item() if x_t_latent.numel() > 0 else 'N/A'}, max: {x_t_latent.max().item() if x_t_latent.numel() > 0 else 'N/A'}, mean: {x_t_latent.mean().item() if x_t_latent.numel() > 0 else 'N/A'}")
+        
         return x_t_latent
 
     def decode_image(self, x_0_pred_out: torch.Tensor) -> torch.Tensor:
