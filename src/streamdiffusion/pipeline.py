@@ -413,6 +413,7 @@ class StreamDiffusion:
             # x_t_latent (input to unet_step) has batch_size = DSN * FBS.
             # t_list (input to unet_step) has batch_size = DSN.
             # We need t_list to be DSN * FBS for the UNet if no CFG, or for CFG logic to build upon.
+            print(f"[DEBUG] Before t_list mod: t_list.shape = {t_list.shape}, DSN = {self.denoising_steps_num}, FBS = {self.frame_bff_size}")
             if t_list.shape[0] == self.denoising_steps_num: # Check if it's the original DSN-length t_list
                 if self.denoising_steps_num > 0:
                     first_timestep = t_list[0:1] # Corresponds to the single current frame latent
@@ -423,6 +424,7 @@ class StreamDiffusion:
                     else: # DSN = 1, only current frame, no buffer part in this logic context
                         t_list = first_timestep # Batch size of latents will be 1
                 # else DSN = 0, t_list is empty, this case should ideally not be hit with valid config
+            print(f"[DEBUG] After t_list mod (target shape 1+(DSN-1)*FBS): t_list.shape = {t_list.shape}")
 
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             x_t_latent_plus_uc = torch.concat([x_t_latent[0:1], x_t_latent], dim=0)
@@ -439,6 +441,7 @@ class StreamDiffusion:
             x_t_latent_plus_uc = torch.cat([x_t_latent, self.empty_latent], dim=0)
             t_list = torch.concat([t_list, t_list], dim=0)
         else:
+            print(f"[DEBUG] In CFG 'else' (cfg_type=none): t_list.shape = {t_list.shape}")
             x_t_latent_plus_uc = x_t_latent
 
             # Determine the batch size of x_t_latent_plus_uc, which is what UNet will see
