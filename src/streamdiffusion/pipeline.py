@@ -81,7 +81,7 @@ class StreamDiffusion:
         else:
             print("[StreamDiffusion.__init__] Non-SDXL model detected (or is_xl attribute not found on input pipe).")
 
-    self.inference_time_ema = 0
+        self.inference_time_ema = 0
 
     def load_lcm_lora(
         self,
