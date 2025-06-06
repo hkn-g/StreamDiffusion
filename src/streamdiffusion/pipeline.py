@@ -278,7 +278,12 @@ class StreamDiffusion:
                 )   
 
         self.scheduler.set_timesteps(num_inference_steps, self.device)
-        self.timesteps = self.scheduler.timesteps.to(self.device)
+        print(f"[DEBUG prepare] self.t_list (indices for scheduler): {self.t_list}")
+        print(f"[DEBUG prepare] num_inference_steps for scheduler: {num_inference_steps}")
+        print(f"[DEBUG prepare] self.scheduler.timesteps (source after set_timesteps): {self.scheduler.timesteps}")
+        print(f"[DEBUG prepare] self.sub_timesteps (selected by t_list): {self.sub_timesteps}")
+        self.sub_timesteps_tensor = self.sub_timesteps.to(self.device)
+        print(f"[DEBUG prepare] Initial self.sub_timesteps_tensor.shape = {self.sub_timesteps_tensor.shape}")
 
         # make sub timesteps list based on the indices in the t_list list and the values in the timesteps list
         self.sub_timesteps = []
@@ -709,6 +714,7 @@ class StreamDiffusion:
 
         if self.use_denoising_batch:
             t_list = self.sub_timesteps_tensor
+            print(f"[DEBUG predict_x0_batch] t_list (from self.sub_timesteps_tensor).shape = {t_list.shape}")
             if self.denoising_steps_num > 1:
                 x_t_latent = torch.cat((x_t_latent, prev_latent_batch), dim=0)
                 self.stock_noise = torch.cat(
