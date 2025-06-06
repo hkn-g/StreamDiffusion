@@ -242,7 +242,7 @@ class StreamDiffusion:
                 target_size=(self.height, self.width),
                 dtype=prompt_embeds_main.dtype,
                 text_encoder_projection_dim=proj_dim_to_pass # Explicitly pass it
-            ).unsqueeze(0).to(self.device) # Ensure 2D [1, N_time]
+            ) # Removed .unsqueeze(0)
         else:
             # Original non-SDXL prompt encoding logic
             encoder_output = self.pipe.encode_prompt(
@@ -424,33 +424,37 @@ class StreamDiffusion:
                      _current_add_time_ids = _current_add_time_ids.unsqueeze(0)
                 _current_add_time_ids = _current_add_time_ids.repeat_interleave(unet_input_batch_size, dim=0)
 
-            else: # No CFG for UNet call, or 'self' CFG (UNet sees only conditional part)
-                  # _current_text_embeds is (1, D_pool), _current_add_time_ids is (1, D_time)
-                  # Repeat to match unet_input_batch_size
-                  # Ensure _current_text_embeds has a batch dimension before repeat_interleave
-                if _current_text_embeds.ndim == 2: # (token_len, D_pool)
-                     _current_text_embeds = _current_text_embeds.unsqueeze(0) # (1, token_len, D_pool)
-                _current_text_embeds = _current_text_embeds.repeat_interleave(unet_input_batch_size, dim=0)
+            else: 
+                # _current_text_embeds is (1, D_pool), _current_add_time_ids is (1, D_time)
+                # Repeat to match unet_input_batch_size
+                # _current_text_embeds is self.sdxl_pooled_prompt_embeds (shape [1, D_pool] or potentially [D_pool])
+                # Repeat to match unet_input_batch_size, resulting in shape [unet_input_batch_size, D_pool]
+                if _current_text_embeds.ndim == 1:
+                    _current_text_embeds = _current_text_embeds.unsqueeze(0) # Ensure it's [1, D_pool]
+                _current_text_embeds = _current_text_embeds.repeat(unet_input_batch_size, 1)
                 
                 # Ensure _current_add_time_ids has a batch dimension before repeat_interleave
+                # _current_add_time_ids is self.sdxl_add_time_ids (shape [1, D_time] or potentially [D_time])
+                # Repeat to match unet_input_batch_size, resulting in shape [unet_input_batch_size, D_time]
                 if _current_add_time_ids.ndim == 1:
-                     _current_add_time_ids = _current_add_time_ids.unsqueeze(0)
-                _current_add_time_ids = _current_add_time_ids.repeat_interleave(unet_input_batch_size, dim=0)
+                    _current_add_time_ids = _current_add_time_ids.unsqueeze(0) # Ensure it's [1, D_time]
+    
+            _current_add_time_ids = _current_add_time_ids.repeat(unet_input_batch_size, 1) # Changed repeat_interleave to repeat
 
             added_cond_kwargs = {"text_embeds": _current_text_embeds, "time_ids": _current_add_time_ids}
 
-        # ==== BEGIN SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
-        print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_pooled_prompt_embeds (from prepare): {self.sdxl_pooled_prompt_embeds.shape if hasattr(self, 'sdxl_pooled_prompt_embeds') and self.sdxl_pooled_prompt_embeds is not None else 'Not Found'}")
-        print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_add_time_ids (from prepare, after unsqueeze): {self.sdxl_add_time_ids.shape if hasattr(self, 'sdxl_add_time_ids') and self.sdxl_add_time_ids is not None else 'Not Found'}")
-        if added_cond_kwargs is not None:
-            print(f"[StreamDiffusion.unet_step] Shape of text_embeds in added_cond_kwargs: {added_cond_kwargs.get('text_embeds').shape if added_cond_kwargs.get('text_embeds') is not None else 'Not in kwargs'}")
-            print(f"[StreamDiffusion.unet_step] Shape of time_ids in added_cond_kwargs: {added_cond_kwargs.get('time_ids').shape if added_cond_kwargs.get('time_ids') is not None else 'Not in kwargs'}")
-        else:
-            print("[StreamDiffusion.unet_step] added_cond_kwargs is None")
-        print(f"[StreamDiffusion.unet_step] Shape of encoder_hidden_states (main prompt embeds) being passed to UNet: {self.prompt_embeds.shape if self.prompt_embeds is not None else 'Not Found'}")
-        print(f"[StreamDiffusion.unet_step] Shape of x_t_latent_plus_uc being passed to UNet: {x_t_latent_plus_uc.shape}")
-        print(f"[StreamDiffusion.unet_step] Shape of t_list being passed to UNet: {t_list.shape if isinstance(t_list, torch.Tensor) else len(t_list)}")
-        # ==== END SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
+            # ==== BEGIN SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
+            print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_pooled_prompt_embeds (from prepare): {self.sdxl_pooled_prompt_embeds.shape if hasattr(self, 'sdxl_pooled_prompt_embeds') and self.sdxl_pooled_prompt_embeds is not None else 'Not Found'}")
+            print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_add_time_ids (from prepare): {self.sdxl_add_time_ids.shape if hasattr(self, 'sdxl_add_time_ids') and self.sdxl_add_time_ids is not None else 'Not Found'}")
+            if added_cond_kwargs is not None:
+                print(f"[StreamDiffusion.unet_step] Shape of text_embeds in added_cond_kwargs: {added_cond_kwargs.get('text_embeds').shape if added_cond_kwargs.get('text_embeds') is not None else 'Not in kwargs'}")
+                print(f"[StreamDiffusion.unet_step] Shape of time_ids in added_cond_kwargs: {added_cond_kwargs.get('time_ids').shape if added_cond_kwargs.get('time_ids') is not None else 'Not in kwargs'}")
+            else:
+                print("[StreamDiffusion.unet_step] added_cond_kwargs is None")
+            print(f"[StreamDiffusion.unet_step] Shape of encoder_hidden_states (main prompt embeds) being passed to UNet: {self.prompt_embeds.shape if self.prompt_embeds is not None else 'Not Found'}")
+            print(f"[StreamDiffusion.unet_step] Shape of x_t_latent_plus_uc being passed to UNet: {x_t_latent_plus_uc.shape}")
+            print(f"[StreamDiffusion.unet_step] Shape of t_list being passed to UNet: {t_list.shape if isinstance(t_list, torch.Tensor) else len(t_list)}")
+            # ==== END SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
 
         model_pred = self.unet(
             x_t_latent_plus_uc,
