@@ -226,11 +226,22 @@ class StreamDiffusion:
             else:
                  print("[StreamDiffusion.prepare] Could not retrieve self.pipe.unet.config.addition_time_embed_dim or it's missing.")
             # ==== END SDXL DIAGNOSTIC LOGGING (StreamDiffusion.prepare) ====
+            
+            # Determine the projection_dim to pass
+            proj_dim_to_pass = None
+            if hasattr(self.pipe, 'text_encoder_2') and self.pipe.text_encoder_2 is not None and \
+               hasattr(self.pipe.text_encoder_2, 'config') and self.pipe.text_encoder_2.config is not None and \
+               hasattr(self.pipe.text_encoder_2.config, 'projection_dim'):
+                proj_dim_to_pass = self.pipe.text_encoder_2.config.projection_dim
+            
+            print(f"[StreamDiffusion.prepare] Attempting to pass text_encoder_projection_dim: {proj_dim_to_pass} (type: {type(proj_dim_to_pass)}) to _get_add_time_ids")
+
             self.sdxl_add_time_ids = self.pipe._get_add_time_ids(
                 original_size=(self.height, self.width),
                 crops_coords_top_left=(0, 0),
                 target_size=(self.height, self.width),
-                dtype=prompt_embeds_main.dtype
+                dtype=prompt_embeds_main.dtype,
+                text_encoder_projection_dim=proj_dim_to_pass # Explicitly pass it
             ).to(self.device)
         else:
             # Original non-SDXL prompt encoding logic
