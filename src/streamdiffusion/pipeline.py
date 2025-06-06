@@ -578,7 +578,17 @@ class StreamDiffusion:
         print(f"  - max: {image_tensors_for_vae.max().item() if image_tensors_for_vae.numel() > 0 else 'N/A'}")
         print(f"  - mean: {image_tensors_for_vae.mean().item() if image_tensors_for_vae.numel() > 0 else 'N/A'}")
         
-        encoded_output = self.vae.encode(image_tensors_for_vae)
+        original_vae_dtype = self.vae.dtype
+        try:
+            if hasattr(self, 'is_xl') and self.is_xl and self.vae.dtype != torch.float32:
+                print(f"[StreamDiffusion.encode_image] Temporarily casting VAE to float32 for encode. Original dtype: {original_vae_dtype}")
+                self.vae = self.vae.to(torch.float32)
+            
+            encoded_output = self.vae.encode(image_tensors_for_vae)
+        finally:
+            if hasattr(self, 'is_xl') and self.is_xl and self.vae.dtype != original_vae_dtype: # Check if cast happened
+                print(f"[StreamDiffusion.encode_image] Casting VAE back to original dtype: {original_vae_dtype}")
+                self.vae = self.vae.to(original_vae_dtype)
         # Check the sample from the latent distribution
         # Sample once and reuse for checking and for retrieve_latents if it expects a sample
         # However, retrieve_latents might do its own sampling or use .mean. Assuming it handles encoded_output.
@@ -636,9 +646,19 @@ class StreamDiffusion:
             print(f"[StreamDiffusion.decode_image] WARNING: image_latents_for_decode (AFTER float32 cast) still contains NaN/inf values!")
             print(f"[StreamDiffusion.decode_image] image_latents_for_decode (after cast) min: {image_latents_for_decode.min().item() if image_latents_for_decode.numel() > 0 else 'N/A'}, max: {image_latents_for_decode.max().item() if image_latents_for_decode.numel() > 0 else 'N/A'}, mean: {image_latents_for_decode.mean().item() if image_latents_for_decode.numel() > 0 else 'N/A'}")
 
-        image = self.vae.decode(
-            image_latents_for_decode, return_dict=False
-        )[0]
+        original_vae_dtype = self.vae.dtype
+        try:
+            if hasattr(self, 'is_xl') and self.is_xl and self.vae.dtype != torch.float32:
+                print(f"[StreamDiffusion.decode_image] Temporarily casting VAE to float32 for decode. Original dtype: {original_vae_dtype}")
+                self.vae = self.vae.to(torch.float32)
+
+            image = self.vae.decode(
+                image_latents_for_decode, return_dict=False
+            )[0]
+        finally:
+            if hasattr(self, 'is_xl') and self.is_xl and self.vae.dtype != original_vae_dtype: # Check if cast happened
+                print(f"[StreamDiffusion.decode_image] Casting VAE back to original dtype: {original_vae_dtype}")
+                self.vae = self.vae.to(original_vae_dtype)
 
         # NaN/inf check for VAE output (before normalization)
         if torch.isnan(image).any() or torch.isinf(image).any():
