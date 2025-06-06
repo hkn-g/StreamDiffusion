@@ -158,26 +158,71 @@ class StreamDiffusion:
         if self.guidance_scale > 1.0:
             do_classifier_free_guidance = True
 
-        encoder_output = self.pipe.encode_prompt(
-            prompt=prompt,
-            device=self.device,
-            num_images_per_prompt=1,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            negative_prompt=negative_prompt,
-        )
-        self.prompt_embeds = encoder_output[0].repeat(self.batch_size, 1, 1)
+        # SDXL-specific attributes to be populated if is_xl is True
+        self.sdxl_pooled_prompt_embeds = None
+        self.sdxl_negative_pooled_prompt_embeds = None
+        self.sdxl_add_time_ids = None
 
-        if self.use_denoising_batch and self.cfg_type == "full":
-            uncond_prompt_embeds = encoder_output[1].repeat(self.batch_size, 1, 1)
-        elif self.cfg_type == "initialize":
-            uncond_prompt_embeds = encoder_output[1].repeat(self.frame_bff_size, 1, 1)
-
-        if self.guidance_scale > 1.0 and (
-            self.cfg_type == "initialize" or self.cfg_type == "full"
-        ):
-            self.prompt_embeds = torch.cat(
-                [uncond_prompt_embeds, self.prompt_embeds], dim=0
+        if hasattr(self, 'is_xl') and self.is_xl:
+            # Logic for SDXL prompt encoding
+            # Note: encode_prompt for SDXL returns (prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds)
+            prompt_embeds_main, negative_prompt_embeds_main, pooled_prompt_embeds, negative_pooled_prompt_embeds = self.pipe.encode_prompt(
+                prompt=prompt,
+                device=self.device,
+                num_images_per_prompt=1,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                negative_prompt=negative_prompt,
             )
+
+            self.sdxl_pooled_prompt_embeds = pooled_prompt_embeds
+            if do_classifier_free_guidance:
+                self.sdxl_negative_pooled_prompt_embeds = negative_pooled_prompt_embeds
+
+            # Prepare main prompt embeddings (self.prompt_embeds) for UNet's encoder_hidden_states
+            _cond_prompt_embeds_main_xl = prompt_embeds_main.repeat(self.batch_size, 1, 1)
+            if do_classifier_free_guidance:
+                # Determine batch size for unconditional embeddings based on original logic
+                batch_size_for_uncond = self.batch_size if (self.use_denoising_batch and self.cfg_type == "full") else self.frame_bff_size
+                _uncond_prompt_embeds_main_xl = negative_prompt_embeds_main.repeat(batch_size_for_uncond, 1, 1)
+
+                if self.cfg_type == "initialize" or self.cfg_type == "full":
+                    self.prompt_embeds = torch.cat([_uncond_prompt_embeds_main_xl, _cond_prompt_embeds_main_xl], dim=0)
+                elif self.cfg_type == "self":
+                    # For 'self' CFG, StreamDiffusion's UNet call only gets conditional embeds.
+                    # Unconditional part is mixed later using stock_noise. This is standard for main embeds.
+                    self.prompt_embeds = _cond_prompt_embeds_main_xl
+                    # Storing uncond main embeds separately in case stock_noise needs them later for SDXL (though unlikely for this patch scope)
+                    self.sdxl_uncond_main_prompt_embeds_for_self_cfg = _uncond_prompt_embeds_main_xl 
+                else: # cfg_type == "none" or other unhandled CFG for SDXL
+                    self.prompt_embeds = _cond_prompt_embeds_main_xl
+            else: # No classifier-free guidance
+                self.prompt_embeds = _cond_prompt_embeds_main_xl
+
+            # Generate and store add_time_ids for SDXL
+            self.sdxl_add_time_ids = self.pipe._get_add_time_ids(
+                original_size=(self.height, self.width),
+                crops_coords_top_left=(0, 0),
+                target_size=(self.height, self.width),
+                dtype=prompt_embeds_main.dtype,
+                device=self.device
+            )
+        else:
+            # Original non-SDXL prompt encoding logic
+            encoder_output = self.pipe.encode_prompt(
+                prompt=prompt,
+                device=self.device,
+                num_images_per_prompt=1,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                negative_prompt=negative_prompt,
+            )
+            self.prompt_embeds = encoder_output[0].repeat(self.batch_size, 1, 1)
+
+            if do_classifier_free_guidance and (self.cfg_type == "initialize" or self.cfg_type == "full"):
+                batch_size_for_uncond = self.batch_size if (self.use_denoising_batch and self.cfg_type == "full") else self.frame_bff_size
+                uncond_prompt_embeds = encoder_output[1].repeat(batch_size_for_uncond, 1, 1)
+                self.prompt_embeds = torch.cat(
+                    [uncond_prompt_embeds, self.prompt_embeds], dim=0
+                )   
 
         self.scheduler.set_timesteps(num_inference_steps, self.device)
         self.timesteps = self.scheduler.timesteps.to(self.device)
@@ -310,10 +355,58 @@ class StreamDiffusion:
         else:
             x_t_latent_plus_uc = x_t_latent
 
+        added_cond_kwargs = None
+        if hasattr(self, 'is_xl') and self.is_xl and hasattr(self, 'sdxl_pooled_prompt_embeds') and self.sdxl_pooled_prompt_embeds is not None and hasattr(self, 'sdxl_add_time_ids') and self.sdxl_add_time_ids is not None:
+            # Prepare added_cond_kwargs for SDXL
+            _current_text_embeds = self.sdxl_pooled_prompt_embeds # This is (1, D_pool) or (batch_pooled, D_pool)
+            _current_add_time_ids = self.sdxl_add_time_ids     # This is (1, D_time) or (batch_time, D_time)
+
+            # Determine the batch size of x_t_latent_plus_uc, which is what UNet will see
+            unet_input_batch_size = x_t_latent_plus_uc.shape[0]
+
+            if self.guidance_scale > 1.0 and (self.cfg_type == "full" or self.cfg_type == "initialize"):
+                # In 'full' or 'initialize' CFG, x_t_latent_plus_uc is doubled (or nearly for init)
+                # and self.prompt_embeds (main) is [uncond_main, cond_main]
+                # So, pooled embeds and time_ids also need to be [uncond_pooled, cond_pooled] and [ids, ids]
+                if hasattr(self, 'sdxl_negative_pooled_prompt_embeds') and self.sdxl_negative_pooled_prompt_embeds is not None:
+                    # Concatenate negative and positive pooled embeddings
+                    _current_text_embeds = torch.cat([self.sdxl_negative_pooled_prompt_embeds, self.sdxl_pooled_prompt_embeds], dim=0)
+                else: # Should not happen if CFG is on and SDXL negative_pooled was captured
+                    _current_text_embeds = torch.cat([self.sdxl_pooled_prompt_embeds, self.sdxl_pooled_prompt_embeds], dim=0) # Fallback: use positive for negative
+                
+                # _current_text_embeds is now (2, D_pool). It needs to be (unet_input_batch_size, D_pool).
+                # If unet_input_batch_size is 2*N, and _current_text_embeds is (2,D), repeat N times.
+                # N = x_t_latent.shape[0] (original latent batch before CFG duplication by unet_step)
+                num_repeats_for_cfg = x_t_latent.shape[0]
+                _current_text_embeds = _current_text_embeds.repeat_interleave(num_repeats_for_cfg, dim=0)
+
+                # _current_add_time_ids is (1, D_time) or (batch_time, D_time). It needs to be (unet_input_batch_size, D_time).
+                # For CFG, it's typically the same time_ids repeated for both cond and uncond paths.
+                # Ensure _current_add_time_ids has a batch dimension before repeat_interleave
+                if _current_add_time_ids.ndim == 1:
+                     _current_add_time_ids = _current_add_time_ids.unsqueeze(0)
+                _current_add_time_ids = _current_add_time_ids.repeat_interleave(unet_input_batch_size, dim=0)
+
+            else: # No CFG for UNet call, or 'self' CFG (UNet sees only conditional part)
+                  # _current_text_embeds is (1, D_pool), _current_add_time_ids is (1, D_time)
+                  # Repeat to match unet_input_batch_size
+                  # Ensure _current_text_embeds has a batch dimension before repeat_interleave
+                if _current_text_embeds.ndim == 2: # (token_len, D_pool)
+                     _current_text_embeds = _current_text_embeds.unsqueeze(0) # (1, token_len, D_pool)
+                _current_text_embeds = _current_text_embeds.repeat_interleave(unet_input_batch_size, dim=0)
+                
+                # Ensure _current_add_time_ids has a batch dimension before repeat_interleave
+                if _current_add_time_ids.ndim == 1:
+                     _current_add_time_ids = _current_add_time_ids.unsqueeze(0)
+                _current_add_time_ids = _current_add_time_ids.repeat_interleave(unet_input_batch_size, dim=0)
+
+            added_cond_kwargs = {"text_embeds": _current_text_embeds, "time_ids": _current_add_time_ids}
+
         model_pred = self.unet(
             x_t_latent_plus_uc,
             t_list,
             encoder_hidden_states=self.prompt_embeds,
+            added_cond_kwargs=added_cond_kwargs,  # Pass SDXL specific args
             return_dict=False,
         )[0]
 
