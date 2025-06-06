@@ -330,16 +330,34 @@ class StreamDiffusion:
             .view(len(self.t_list), 1, 1, 1)
             .to(dtype=self.dtype, device=self.device)
         )
-        self.alpha_prod_t_sqrt = torch.repeat_interleave(
-            alpha_prod_t_sqrt,
-            repeats=self.frame_bff_size if self.use_denoising_batch else 1,
-            dim=0,
-        )
-        self.beta_prod_t_sqrt = torch.repeat_interleave(
-            beta_prod_t_sqrt,
-            repeats=self.frame_bff_size if self.use_denoising_batch else 1,
-            dim=0,
-        )
+        # alpha_prod_t_sqrt and beta_prod_t_sqrt are base tensors of shape [DSN, 1, 1, 1]
+        if self.use_denoising_batch:
+            if self.denoising_steps_num > 0:
+                # Current frame component (repeat 1 time)
+                first_alpha_sqrt = alpha_prod_t_sqrt[0:1]
+                first_beta_sqrt = beta_prod_t_sqrt[0:1]
+
+                if self.denoising_steps_num > 1:
+                    # Buffered frames component (repeat frame_bff_size times)
+                    remaining_alphas_sqrt = alpha_prod_t_sqrt[1:]
+                    remaining_betas_sqrt = beta_prod_t_sqrt[1:]
+                    
+                    remaining_alphas_sqrt_repeated = remaining_alphas_sqrt.repeat_interleave(self.frame_bff_size, dim=0)
+                    remaining_betas_sqrt_repeated = remaining_betas_sqrt.repeat_interleave(self.frame_bff_size, dim=0)
+                    
+                    self.alpha_prod_t_sqrt = torch.cat((first_alpha_sqrt, remaining_alphas_sqrt_repeated), dim=0)
+                    self.beta_prod_t_sqrt = torch.cat((first_beta_sqrt, remaining_betas_sqrt_repeated), dim=0)
+                else:  # denoising_steps_num == 1
+                    self.alpha_prod_t_sqrt = first_alpha_sqrt
+                    self.beta_prod_t_sqrt = first_beta_sqrt
+            else:  # denoising_steps_num == 0, should ideally not happen
+                self.alpha_prod_t_sqrt = torch.empty((0, 1, 1, 1), dtype=self.dtype, device=self.device)
+                self.beta_prod_t_sqrt = torch.empty((0, 1, 1, 1), dtype=self.dtype, device=self.device)
+        else:  # Not use_denoising_batch
+            # Original behavior: repeats=1, so use the base tensors directly.
+            # Their shape will be [DSN, 1, 1, 1].
+            self.alpha_prod_t_sqrt = alpha_prod_t_sqrt
+            self.beta_prod_t_sqrt = beta_prod_t_sqrt
 
     @torch.no_grad()
     def update_prompt(self, prompt: str) -> None:
