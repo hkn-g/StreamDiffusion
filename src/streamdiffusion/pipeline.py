@@ -74,15 +74,14 @@ class StreamDiffusion:
         self.unet = pipe.unet
         self.vae = pipe.vae
 
-    # Check if the pipeline is an SDXL model
-    self.is_xl = getattr(pipe, 'is_xl', False)
-    if self.is_xl:
-        print("[StreamDiffusion.__init__] SDXL model detected.")
-    else:
-        print("[StreamDiffusion.__init__] Non-SDXL model detected (or is_xl attribute not found on input pipe).")
+        # Check if the pipeline is an SDXL model
+        self.is_xl = getattr(pipe, 'is_xl', False)
+        if self.is_xl:
+            print("[StreamDiffusion.__init__] SDXL model detected.")
+        else:
+            print("[StreamDiffusion.__init__] Non-SDXL model detected (or is_xl attribute not found on input pipe).")
 
-
-        self.inference_time_ema = 0
+    self.inference_time_ema = 0
 
     def load_lcm_lora(
         self,
