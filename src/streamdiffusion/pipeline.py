@@ -281,6 +281,7 @@ class StreamDiffusion:
         print(f"[DEBUG prepare] self.t_list (indices for scheduler): {self.t_list}")
         print(f"[DEBUG prepare] num_inference_steps for scheduler: {num_inference_steps}")
         print(f"[DEBUG prepare] self.scheduler.timesteps (source after set_timesteps): {self.scheduler.timesteps}")
+        self.sub_timesteps = self.scheduler.timesteps[self.t_list] # Define self.sub_timesteps
         print(f"[DEBUG prepare] self.sub_timesteps (selected by t_list): {self.sub_timesteps}")
         self.sub_timesteps_tensor = self.sub_timesteps.to(self.device)
         print(f"[DEBUG prepare] Initial self.sub_timesteps_tensor.shape = {self.sub_timesteps_tensor.shape}")
