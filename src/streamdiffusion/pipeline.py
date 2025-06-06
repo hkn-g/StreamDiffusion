@@ -392,6 +392,10 @@ class StreamDiffusion:
             F_theta = (
                 x_t_latent_batch - self.beta_prod_t_sqrt * model_pred_batch
             ) / self.alpha_prod_t_sqrt
+            print(f"[DEBUG scheduler_step_batch] F_theta.shape = {F_theta.shape}")
+            print(f"[DEBUG scheduler_step_batch] self.c_out.shape = {self.c_out.shape}")
+            print(f"[DEBUG scheduler_step_batch] self.c_skip.shape = {self.c_skip.shape}")
+            print(f"[DEBUG scheduler_step_batch] x_t_latent_batch.shape = {x_t_latent_batch.shape}")
             denoised_batch = self.c_out * F_theta + self.c_skip * x_t_latent_batch
         else:
             F_theta = (
