@@ -442,30 +442,91 @@ class StreamDiffusion:
                 if _current_add_time_ids.ndim == 1:
                     _current_add_time_ids = _current_add_time_ids.unsqueeze(0) # Ensure it's [1, D_time]
     
-            _current_add_time_ids = _current_add_time_ids.repeat(unet_input_batch_size, 1) # Changed repeat_interleave to repeat
+                _current_add_time_ids = _current_add_time_ids.repeat(unet_input_batch_size, 1) # Changed repeat_interleave to repeat
 
-            added_cond_kwargs = {"text_embeds": _current_text_embeds, "time_ids": _current_add_time_ids}
+                added_cond_kwargs = {"text_embeds": _current_text_embeds, "time_ids": _current_add_time_ids}
 
-            # ==== BEGIN SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
-            print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_pooled_prompt_embeds (from prepare): {self.sdxl_pooled_prompt_embeds.shape if hasattr(self, 'sdxl_pooled_prompt_embeds') and self.sdxl_pooled_prompt_embeds is not None else 'Not Found'}")
-            print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_add_time_ids (from prepare): {self.sdxl_add_time_ids.shape if hasattr(self, 'sdxl_add_time_ids') and self.sdxl_add_time_ids is not None else 'Not Found'}")
-            if added_cond_kwargs is not None:
-                print(f"[StreamDiffusion.unet_step] Shape of text_embeds in added_cond_kwargs: {added_cond_kwargs.get('text_embeds').shape if added_cond_kwargs.get('text_embeds') is not None else 'Not in kwargs'}")
-                print(f"[StreamDiffusion.unet_step] Shape of time_ids in added_cond_kwargs: {added_cond_kwargs.get('time_ids').shape if added_cond_kwargs.get('time_ids') is not None else 'Not in kwargs'}")
-            else:
-                print("[StreamDiffusion.unet_step] added_cond_kwargs is None")
-            print(f"[StreamDiffusion.unet_step] Shape of encoder_hidden_states (main prompt embeds) being passed to UNet: {self.prompt_embeds.shape if self.prompt_embeds is not None else 'Not Found'}")
-            print(f"[StreamDiffusion.unet_step] Shape of x_t_latent_plus_uc being passed to UNet: {x_t_latent_plus_uc.shape}")
-            print(f"[StreamDiffusion.unet_step] Shape of t_list being passed to UNet: {t_list.shape if isinstance(t_list, torch.Tensor) else len(t_list)}")
-            # ==== END SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
+                # ==== BEGIN SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
+                print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_pooled_prompt_embeds (from prepare): {self.sdxl_pooled_prompt_embeds.shape if hasattr(self, 'sdxl_pooled_prompt_embeds') and self.sdxl_pooled_prompt_embeds is not None else 'Not Found'}")
+                print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_add_time_ids (from prepare): {self.sdxl_add_time_ids.shape if hasattr(self, 'sdxl_add_time_ids') and self.sdxl_add_time_ids is not None else 'Not Found'}")
+                if added_cond_kwargs is not None:
+                    print(f"[StreamDiffusion.unet_step] Shape of text_embeds in added_cond_kwargs: {added_cond_kwargs.get('text_embeds').shape if added_cond_kwargs.get('text_embeds') is not None else 'Not in kwargs'}")
+                    print(f"[StreamDiffusion.unet_step] Shape of time_ids in added_cond_kwargs: {added_cond_kwargs.get('time_ids').shape if added_cond_kwargs.get('time_ids') is not None else 'Not in kwargs'}")
+                else:
+                    print("[StreamDiffusion.unet_step] added_cond_kwargs is None")
+                print(f"[StreamDiffusion.unet_step] Shape of encoder_hidden_states (main prompt embeds) being passed to UNet: {self.prompt_embeds.shape if self.prompt_embeds is not None else 'Not Found'}")
+                print(f"[StreamDiffusion.unet_step] Shape of x_t_latent_plus_uc being passed to UNet: {x_t_latent_plus_uc.shape}")
+                print(f"[StreamDiffusion.unet_step] Shape of t_list being passed to UNet: {t_list.shape if isinstance(t_list, torch.Tensor) else len(t_list)}")
+                # ==== END SDXL DIAGNOSTIC LOGGING (StreamDiffusion.unet_step) ====
+
+        added_cond_kwargs_xl_float32 = None
+        if hasattr(self, 'is_xl') and self.is_xl:
+            # Ensure pooled embeds and time_ids are on the correct device and dtype
+            _current_text_embeds = self.sdxl_pooled_prompt_embeds.to(device=self.device, dtype=self.dtype)
+            _current_add_time_ids = self.sdxl_add_time_ids.to(device=self.device, dtype=self.dtype)
+
+            # Handle CFG for SDXL pooled embeds and time_ids
+            if self.guidance_scale > 1.0 and (self.cfg_type == "full" or self.cfg_type == "initialize"):
+                _current_negative_text_embeds = self.sdxl_negative_pooled_prompt_embeds.to(device=self.device, dtype=self.dtype)
+                # Concatenate negative and positive pooled embeds for CFG
+                _current_text_embeds = torch.cat([_current_negative_text_embeds, _current_text_embeds], dim=0)
+                # Repeat for batch size, ensuring it matches unet_input_batch_size logic
+                _current_text_embeds = _current_text_embeds.repeat_interleave(num_repeats_for_cfg, dim=0)
+
+                # Ensure add_time_ids is 2D [batch, D]
+                if _current_add_time_ids.ndim == 1:
+                    _current_add_time_ids = _current_add_time_ids.unsqueeze(0) # [1, D]
+                # For CFG, add_time_ids are typically repeated twice (once for neg, once for pos) then by num_repeats_for_cfg
+                # The diffusers SDXL pipeline repeats add_time_ids to match the doubled prompt_embeds batch size.
+                _current_add_time_ids = _current_add_time_ids.repeat(2 * num_repeats_for_cfg, 1) # Match [2*num_repeats, D]
+
+            else: # Not using CFG or self-negative
+                # Ensure pooled embeds are 2D [batch, D]
+                if _current_text_embeds.ndim == 1:
+                    _current_text_embeds = _current_text_embeds.unsqueeze(0) # [1, D]
+                _current_text_embeds = _current_text_embeds.repeat(unet_input_batch_size, 1) # [unet_batch, D]
+
+                # Ensure add_time_ids is 2D [batch, D]
+                if _current_add_time_ids.ndim == 1:
+                    _current_add_time_ids = _current_add_time_ids.unsqueeze(0) # [1, D]
+                _current_add_time_ids = _current_add_time_ids.repeat(unet_input_batch_size, 1) # [unet_batch, D]
+
+            added_cond_kwargs_xl = {"text_embeds": _current_text_embeds, "time_ids": _current_add_time_ids}
+            added_cond_kwargs_xl_float32 = {
+                "text_embeds": _current_text_embeds.to(dtype=torch.float32),
+                "time_ids": _current_add_time_ids.to(dtype=torch.float32)
+            }
+            # Diagnostic logging for SDXL conditioning tensors
+            print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_pooled_prompt_embeds (from prepare): {self.sdxl_pooled_prompt_embeds.shape if self.sdxl_pooled_prompt_embeds is not None else 'None'}")
+            print(f"[StreamDiffusion.unet_step] Shape of self.sdxl_add_time_ids (from prepare): {self.sdxl_add_time_ids.shape if self.sdxl_add_time_ids is not None else 'None'}")
+            print(f"[StreamDiffusion.unet_step] Shape of text_embeds in added_cond_kwargs: {_current_text_embeds.shape}")
+            print(f"[StreamDiffusion.unet_step] Shape of time_ids in added_cond_kwargs: {_current_add_time_ids.shape}")
+        else:
+            added_cond_kwargs_xl = None # Original, for non-float32 path if we revert
+
+        print(f"[StreamDiffusion.unet_step] Shape of encoder_hidden_states (main prompt embeds) being passed to UNet: {self.prompt_embeds.shape}")
+        print(f"[StreamDiffusion.unet_step] Shape of x_t_latent_plus_uc being passed to UNet: {x_t_latent_plus_uc.shape}")
+        print(f"[StreamDiffusion.unet_step] Shape of t_list being passed to UNet: {t_list.shape}")
+
+        # NaN/inf check for UNet input latents
+        if torch.isnan(x_t_latent_plus_uc).any() or torch.isinf(x_t_latent_plus_uc).any():
+            print(f"[StreamDiffusion.unet_step] WARNING: UNet input latents (x_t_latent_plus_uc) contains NaN/inf values BEFORE UNet call!")
+
+        # Store original UNet dtype and cast to float32 for stable computation
+        original_unet_dtype = self.unet.dtype
+        self.unet.to(torch.float32)
 
         model_pred = self.unet(
-            x_t_latent_plus_uc,
-            t_list,
-            encoder_hidden_states=self.prompt_embeds, # This is [uncond_main, cond_main] or just [cond_main]
-            added_cond_kwargs=added_cond_kwargs, # This contains pooled_embeds and time_ids
+            x_t_latent_plus_uc.to(dtype=torch.float32),
+            t_list.to(dtype=torch.float32), # t_list is usually int/long, but ensure consistency if it were float
+            encoder_hidden_states=self.prompt_embeds.to(dtype=torch.float32),
+            added_cond_kwargs=added_cond_kwargs_xl_float32, # Use float32 version
             return_dict=False,
         )[0]
+
+        # Cast UNet output back to original dtype and restore UNet dtype
+        model_pred = model_pred.to(original_unet_dtype)
+        self.unet.to(original_unet_dtype) # Restore UNet to original dtype
 
         # NaN/inf check for UNet output
         if torch.isnan(model_pred).any() or torch.isinf(model_pred).any():
