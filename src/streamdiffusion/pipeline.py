@@ -408,7 +408,15 @@ class StreamDiffusion:
             # t_list (input to unet_step) has batch_size = DSN.
             # We need t_list to be DSN * FBS for the UNet if no CFG, or for CFG logic to build upon.
             if t_list.shape[0] == self.denoising_steps_num: # Check if it's the original DSN-length t_list
-                t_list = t_list.repeat_interleave(self.frame_bff_size)
+                if self.denoising_steps_num > 0:
+                    first_timestep = t_list[0:1] # Corresponds to the single current frame latent
+                    if self.denoising_steps_num > 1:
+                        remaining_timesteps = t_list[1:] # Corresponds to latents from the buffer
+                        remaining_timesteps_repeated = remaining_timesteps.repeat_interleave(self.frame_bff_size)
+                        t_list = torch.cat((first_timestep, remaining_timesteps_repeated))
+                    else: # DSN = 1, only current frame, no buffer part in this logic context
+                        t_list = first_timestep # Batch size of latents will be 1
+                # else DSN = 0, t_list is empty, this case should ideally not be hit with valid config
 
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             x_t_latent_plus_uc = torch.concat([x_t_latent[0:1], x_t_latent], dim=0)
