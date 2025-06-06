@@ -562,7 +562,7 @@ class StreamDiffusion:
 
         image_tensors_for_vae = image_tensors.to(
             device=self.device,
-            dtype=self.vae.dtype, 
+            dtype=torch.float32, 
         )
 
         # VAE Input Logging Block
@@ -622,13 +622,22 @@ class StreamDiffusion:
 
         image_latents = x_0_pred_out / self.vae.config.scaling_factor
 
-        # NaN/inf check for VAE input scaled
+        # NaN/inf check for VAE input scaled (before float32 cast)
         if torch.isnan(image_latents).any() or torch.isinf(image_latents).any():
-            print(f"[StreamDiffusion.decode_image] WARNING: Scaled VAE input (latents for VAE decode) contains NaN/inf values!")
-            print(f"[StreamDiffusion.decode_image] Scaled VAE input min: {image_latents.min().item() if image_latents.numel() > 0 else 'N/A'}, max: {image_latents.max().item() if image_latents.numel() > 0 else 'N/A'}, mean: {image_latents.mean().item() if image_latents.numel() > 0 else 'N/A'}")
+            print(f"[StreamDiffusion.decode_image] WARNING: Scaled VAE input (image_latents) BEFORE float32 cast contains NaN/inf values!")
+            print(f"[StreamDiffusion.decode_image] image_latents (before cast) min: {image_latents.min().item() if image_latents.numel() > 0 else 'N/A'}, max: {image_latents.max().item() if image_latents.numel() > 0 else 'N/A'}, mean: {image_latents.mean().item() if image_latents.numel() > 0 else 'N/A'}")
+
+        # Ensure VAE decode runs in float32 for stability
+        image_latents_for_decode = image_latents.to(dtype=torch.float32)
+        print(f"[StreamDiffusion.decode_image] VAE decode input (image_latents_for_decode) dtype: {image_latents_for_decode.dtype}, device: {image_latents_for_decode.device}")
+        
+        # NaN/inf check for VAE input after float32 cast
+        if torch.isnan(image_latents_for_decode).any() or torch.isinf(image_latents_for_decode).any():
+            print(f"[StreamDiffusion.decode_image] WARNING: image_latents_for_decode (AFTER float32 cast) still contains NaN/inf values!")
+            print(f"[StreamDiffusion.decode_image] image_latents_for_decode (after cast) min: {image_latents_for_decode.min().item() if image_latents_for_decode.numel() > 0 else 'N/A'}, max: {image_latents_for_decode.max().item() if image_latents_for_decode.numel() > 0 else 'N/A'}, mean: {image_latents_for_decode.mean().item() if image_latents_for_decode.numel() > 0 else 'N/A'}")
 
         image = self.vae.decode(
-            image_latents, return_dict=False
+            image_latents_for_decode, return_dict=False
         )[0]
 
         # NaN/inf check for VAE output (before normalization)
