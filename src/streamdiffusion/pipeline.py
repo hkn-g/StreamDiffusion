@@ -174,9 +174,11 @@ class StreamDiffusion:
                 negative_prompt=negative_prompt,
             )
 
-            self.sdxl_pooled_prompt_embeds = pooled_prompt_embeds
+            self.sdxl_pooled_prompt_embeds = pooled_prompt_embeds.to(self.device) if pooled_prompt_embeds is not None else None
             if do_classifier_free_guidance:
-                self.sdxl_negative_pooled_prompt_embeds = negative_pooled_prompt_embeds
+                self.sdxl_negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.to(self.device) if negative_pooled_prompt_embeds is not None else None
+            else: # Ensure it's None if not CFG, consistent with initialization
+                self.sdxl_negative_pooled_prompt_embeds = None
 
             # Prepare main prompt embeddings (self.prompt_embeds) for UNet's encoder_hidden_states
             _cond_prompt_embeds_main_xl = prompt_embeds_main.repeat(self.batch_size, 1, 1)
@@ -236,13 +238,14 @@ class StreamDiffusion:
             
             print(f"[StreamDiffusion.prepare] Attempting to pass text_encoder_projection_dim: {proj_dim_to_pass} (type: {type(proj_dim_to_pass)}) to _get_add_time_ids")
 
-            self.sdxl_add_time_ids = self.pipe._get_add_time_ids(
+            _add_time_ids_val = self.pipe._get_add_time_ids(
                 original_size=(self.height, self.width),
                 crops_coords_top_left=(0, 0),
                 target_size=(self.height, self.width),
                 dtype=prompt_embeds_main.dtype,
                 text_encoder_projection_dim=proj_dim_to_pass # Explicitly pass it
-            ) # Removed .unsqueeze(0)
+            ) # Original call
+            self.sdxl_add_time_ids = _add_time_ids_val.to(self.device) if _add_time_ids_val is not None else None
         else:
             # Original non-SDXL prompt encoding logic
             encoder_output = self.pipe.encode_prompt(
