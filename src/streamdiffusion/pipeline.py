@@ -397,6 +397,19 @@ class StreamDiffusion:
             print(f"[StreamDiffusion.unet_step] WARNING: Input x_t_latent to unet_step contains NaN/inf values!")
             print(f"[StreamDiffusion.unet_step] x_t_latent (input) min: {x_t_latent.min().item() if x_t_latent.numel() > 0 else 'N/A'}, max: {x_t_latent.max().item() if x_t_latent.numel() > 0 else 'N/A'}, mean: {x_t_latent.mean().item() if x_t_latent.numel() > 0 else 'N/A'}")
 
+        # Ensure t_list is a tensor
+        if not isinstance(t_list, torch.Tensor):
+            t_list = torch.tensor(t_list, device=self.device, dtype=torch.long)
+
+        # Adjust t_list if using denoising batch and frame_buffer_size > 1
+        # This ensures t_list matches the batch dimension of x_t_latent *before* CFG processing.
+        if self.use_denoising_batch and hasattr(self, 'frame_bff_size') and self.frame_bff_size > 1:
+            # x_t_latent (input to unet_step) has batch_size = DSN * FBS.
+            # t_list (input to unet_step) has batch_size = DSN.
+            # We need t_list to be DSN * FBS for the UNet if no CFG, or for CFG logic to build upon.
+            if t_list.shape[0] == self.denoising_steps_num: # Check if it's the original DSN-length t_list
+                t_list = t_list.repeat_interleave(self.frame_bff_size)
+
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             x_t_latent_plus_uc = torch.concat([x_t_latent[0:1], x_t_latent], dim=0)
             t_list = torch.concat([t_list[0:1], t_list], dim=0)
