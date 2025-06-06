@@ -531,10 +531,12 @@ class StreamDiffusion:
         return x_t_latent
 
     def decode_image(self, x_0_pred_out: torch.Tensor) -> torch.Tensor:
-        output_latent = self.vae.decode(
+        image = self.vae.decode(
             x_0_pred_out / self.vae.config.scaling_factor, return_dict=False
         )[0]
-        return output_latent
+        # Normalize to [0, 1] range
+        image = (image / 2 + 0.5).clamp(0, 1)
+        return image
 
     def predict_x0_batch(self, x_t_latent: torch.Tensor) -> torch.Tensor:
         prev_latent_batch = self.x_t_latent_buffer
