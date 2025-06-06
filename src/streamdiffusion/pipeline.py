@@ -467,6 +467,11 @@ class StreamDiffusion:
             return_dict=False,
         )[0]
 
+        # NaN/inf check for UNet output
+        if torch.isnan(model_pred).any() or torch.isinf(model_pred).any():
+            print(f"[StreamDiffusion.unet_step] WARNING: UNet output contains NaN/inf values!")
+            print(f"[StreamDiffusion.unet_step] UNet output min: {model_pred.min().item() if model_pred.numel() > 0 else 'N/A'}, max: {model_pred.max().item() if model_pred.numel() > 0 else 'N/A'}, mean: {model_pred.mean().item() if model_pred.numel() > 0 else 'N/A'}")
+
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             noise_pred_text = model_pred[1:]
             self.stock_noise = torch.concat(
@@ -531,9 +536,27 @@ class StreamDiffusion:
         return x_t_latent
 
     def decode_image(self, x_0_pred_out: torch.Tensor) -> torch.Tensor:
+        # NaN/inf check for VAE input (x_0_pred_out)
+        if torch.isnan(x_0_pred_out).any() or torch.isinf(x_0_pred_out).any():
+            print(f"[StreamDiffusion.decode_image] WARNING: VAE input (x_0_pred_out) contains NaN/inf values!")
+            print(f"[StreamDiffusion.decode_image] VAE input min: {x_0_pred_out.min().item() if x_0_pred_out.numel() > 0 else 'N/A'}, max: {x_0_pred_out.max().item() if x_0_pred_out.numel() > 0 else 'N/A'}, mean: {x_0_pred_out.mean().item() if x_0_pred_out.numel() > 0 else 'N/A'}")
+
+        image_latents = x_0_pred_out / self.vae.config.scaling_factor
+
+        # NaN/inf check for VAE input scaled
+        if torch.isnan(image_latents).any() or torch.isinf(image_latents).any():
+            print(f"[StreamDiffusion.decode_image] WARNING: Scaled VAE input (latents for VAE decode) contains NaN/inf values!")
+            print(f"[StreamDiffusion.decode_image] Scaled VAE input min: {image_latents.min().item() if image_latents.numel() > 0 else 'N/A'}, max: {image_latents.max().item() if image_latents.numel() > 0 else 'N/A'}, mean: {image_latents.mean().item() if image_latents.numel() > 0 else 'N/A'}")
+
         image = self.vae.decode(
-            x_0_pred_out / self.vae.config.scaling_factor, return_dict=False
+            image_latents, return_dict=False
         )[0]
+
+        # NaN/inf check for VAE output (before normalization)
+        if torch.isnan(image).any() or torch.isinf(image).any():
+            print(f"[StreamDiffusion.decode_image] WARNING: VAE output (before normalization) contains NaN/inf values!")
+            print(f"[StreamDiffusion.decode_image] VAE output (raw) min: {image.min().item() if image.numel() > 0 else 'N/A'}, max: {image.max().item() if image.numel() > 0 else 'N/A'}, mean: {image.mean().item() if image.numel() > 0 else 'N/A'}")
+
         # Normalize to [0, 1] range
         image = (image / 2 + 0.5).clamp(0, 1)
         return image
