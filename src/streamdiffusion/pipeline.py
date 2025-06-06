@@ -199,6 +199,27 @@ class StreamDiffusion:
                 self.prompt_embeds = _cond_prompt_embeds_main_xl
 
             # Generate and store add_time_ids for SDXL
+            # ==== BEGIN SDXL DIAGNOSTIC LOGGING (StreamDiffusion.prepare) ====
+            print("[StreamDiffusion.prepare] Checking self.pipe.text_encoder_2 before _get_add_time_ids call...")
+            if hasattr(self.pipe, 'text_encoder_2') and self.pipe.text_encoder_2 is not None:
+                print("[StreamDiffusion.prepare] self.pipe.text_encoder_2 exists.")
+                if hasattr(self.pipe.text_encoder_2, 'config') and self.pipe.text_encoder_2.config is not None:
+                    print("[StreamDiffusion.prepare] self.pipe.text_encoder_2.config exists.")
+                    if hasattr(self.pipe.text_encoder_2.config, 'projection_dim'):
+                        print(f"[StreamDiffusion.prepare] self.pipe.text_encoder_2.config.projection_dim: {self.pipe.text_encoder_2.config.projection_dim}")
+                        print(f"[StreamDiffusion.prepare] Type of projection_dim: {type(self.pipe.text_encoder_2.config.projection_dim)}")
+                    else:
+                        print("[StreamDiffusion.prepare] self.pipe.text_encoder_2.config does NOT have attribute 'projection_dim'.")
+                else:
+                    print("[StreamDiffusion.prepare] self.pipe.text_encoder_2 does NOT have attribute 'config' or it is None.")
+            else:
+                print("[StreamDiffusion.prepare] self.pipe does NOT have attribute 'text_encoder_2' or it is None.")
+            print("[StreamDiffusion.prepare] Also checking self.unet.config.cross_attention_dim as fallback...")
+            if hasattr(self.pipe, 'unet') and hasattr(self.pipe.unet, 'config') and hasattr(self.pipe.unet.config, 'cross_attention_dim'):
+                 print(f"[StreamDiffusion.prepare] self.pipe.unet.config.cross_attention_dim: {self.pipe.unet.config.cross_attention_dim}")
+            else:
+                 print("[StreamDiffusion.prepare] Could not retrieve self.pipe.unet.config.cross_attention_dim")
+            # ==== END SDXL DIAGNOSTIC LOGGING (StreamDiffusion.prepare) ====
             self.sdxl_add_time_ids = self.pipe._get_add_time_ids(
                 original_size=(self.height, self.width),
                 crops_coords_top_left=(0, 0),
