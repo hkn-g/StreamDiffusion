@@ -618,8 +618,6 @@ class StreamDiffusion:
             print(f"[StreamDiffusion.decode_image] WARNING: VAE output (before normalization) contains NaN/inf values!")
             print(f"[StreamDiffusion.decode_image] VAE output (raw) min: {image.min().item() if image.numel() > 0 else 'N/A'}, max: {image.max().item() if image.numel() > 0 else 'N/A'}, mean: {image.mean().item() if image.numel() > 0 else 'N/A'}")
 
-        # Normalize to [0, 1] range
-        image = (image / 2 + 0.5).clamp(0, 1)
         return image
 
     def predict_x0_batch(self, x_t_latent: torch.Tensor) -> torch.Tensor:
@@ -656,19 +654,59 @@ class StreamDiffusion:
                 ).repeat(
                     self.frame_bff_size,
                 )
-                x_0_pred, model_pred = self.unet_step(x_t_latent, t, idx)
-                if idx < len(self.sub_timesteps_tensor) - 1:
-                    if self.do_add_noise:
-                        x_t_latent = self.alpha_prod_t_sqrt[
-                            idx + 1
-                        ] * x_0_pred + self.beta_prod_t_sqrt[
-                            idx + 1
-                        ] * torch.randn_like(
-                            x_0_pred, device=self.device, dtype=self.dtype
-                        )
-                    else:
-                        x_t_latent = self.alpha_prod_t_sqrt[idx + 1] * x_0_pred
-            x_0_pred_out = x_0_pred
+
+                # SDXL conditioning for this non-batch path
+                current_prompt_embeds = self.prompt_embeds
+                if self.is_xl:
+                    bs = x_t_latent.shape[0] # x_t_latent is [N, C, H, W]
+                    _current_pooled_embeds = self.sdxl_pooled_prompt_embeds.repeat(bs, 1)
+                    _current_add_time_ids = self.sdxl_add_time_ids.repeat(bs, 1)
+
+                    # Ensure dtypes are consistent for added_cond_kwargs
+                    _current_pooled_embeds = _current_pooled_embeds.to(dtype=x_t_latent.dtype, device=self.device)
+                    _current_add_time_ids = _current_add_time_ids.to(dtype=x_t_latent.dtype, device=self.device)
+                    added_cond_kwargs_xl = {"text_embeds": _current_pooled_embeds, "time_ids": _current_add_time_ids}
+                else:
+                    added_cond_kwargs_xl = None
+                
+                current_prompt_embeds = current_prompt_embeds.to(dtype=x_t_latent.dtype, device=self.device)
+
+                # Store original UNet dtype and cast UNet to float32 for computation
+                original_unet_dtype = self.unet.dtype
+                try:
+                    self.unet = self.unet.to(torch.float32)
+
+                    # Use t_reshaped (which is `t` from loop, reshaped and on device)
+                    latent_model_input = self.scheduler.scale_model_input(x_t_latent, t_reshaped)
+                    latent_model_input_fp32 = latent_model_input.to(torch.float32)
+                    
+                    current_prompt_embeds_fp32 = current_prompt_embeds.to(torch.float32)
+                    added_cond_kwargs_xl_fp32 = None
+                    if added_cond_kwargs_xl:
+                        added_cond_kwargs_xl_fp32 = {
+                            "text_embeds": added_cond_kwargs_xl["text_embeds"].to(torch.float32),
+                            "time_ids": added_cond_kwargs_xl["time_ids"].to(torch.float32),
+                        }
+
+                    # Direct UNet call
+                    noise_pred_fp32 = self.unet(
+                        latent_model_input_fp32,
+                        t_reshaped.to(torch.float32),
+                        encoder_hidden_states=current_prompt_embeds_fp32,
+                        added_cond_kwargs=added_cond_kwargs_xl_fp32,
+                        return_dict=False,
+                    )[0]
+                    noise_pred = noise_pred_fp32.to(original_unet_dtype) # Cast result back
+                finally:
+                    self.unet = self.unet.to(original_unet_dtype) # Restore UNet dtype
+
+                # Scheduler step
+                x_t_latent = self.scheduler.step(noise_pred, t_reshaped, x_t_latent).prev_sample
+            
+            # After the loop, the final latent is the output for this path
+            x_0_pred_out = x_t_latent
+        
+
 
         return x_0_pred_out
 
